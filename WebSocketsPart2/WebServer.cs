@@ -30,9 +30,9 @@ internal class WebServer
             {
                 Console.WriteLine($"== REQUEST START: {DateTime.UtcNow} =======================================");
 
-                using TcpClient handler = await _tcpListener.AcceptTcpClientAsync();
+                using TcpClient tcpHandler = await _tcpListener.AcceptTcpClientAsync();
                 // Spawn new tasks here to allow asynchronous request handling
-                await using NetworkStream stream = handler.GetStream();
+                await using NetworkStream stream = tcpHandler.GetStream();
                 try
                 {
                     // Convert received bytes into string
@@ -49,18 +49,28 @@ internal class WebServer
                         WriteResponse(stream, "HTTP/1.1 404 Not Found");
                         continue;
                     }
-                    // Extract Headers
-                    Dictionary<string, string> headers = ExtractHeaders(data);
-                    // Extract Body
-                    string body = ExtractBody(data);
 
-                    // Write a simple OK response with some test message
-                    WriteResponse(stream, "HTTP/1.0 200 OK", "200 OK");
-
+                    // Factory pattern to maintain our sanity :)
+                    IEndpointHandler handler = EndpointHandlerFactory.Create(stream, endpointDetails);
+                    try
+                    {
+                        WebServerResponse response = handler.ProcessRequest();
+                        if (response != null)
+                            WriteResponse(stream, response.Status, response.Data);
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteResponse(stream, "HTTP/1.1 500 Internal Server Error", ex.Message);
+                    }
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine(ex);
+                }
+                finally
+                {
+                    stream.Close();
+                    tcpHandler.Close();
                 }
                 Console.WriteLine($"== REQUEST END: {DateTime.UtcNow} =======================================");
             }
@@ -100,24 +110,7 @@ internal class WebServer
             _ => MyHttpMethods.GET,
         };
         string route = tokens[1];
-        return new Endpoint { HttpMethod = method, Route = route };
-    }
-
-    private static string ExtractBody(string data) => data[(data.IndexOf($"{Environment.NewLine}{Environment.NewLine}") + 1)..];
-
-    private static Dictionary<string, string> ExtractHeaders(string data)
-    {
-        int headerStartIndex = data.IndexOf('\n') + 1;
-        int headerEndIndex = data.IndexOf($"{Environment.NewLine}{Environment.NewLine}");
-        string headers = data[headerStartIndex..headerEndIndex]; // Range Operator 🔥🔥🔥
-        var headersArray = headers.Split('\n');
-        Dictionary<string, string> result = [];
-        foreach (var headerEntry in headersArray)
-        {
-            string[] tokens = headerEntry.Split(' ');
-            result.Add(tokens[0].Replace(":", ""), tokens[1]);
-        }
-        return result;
+        return new Endpoint { HttpMethod = method, Route = route, Data = data };
     }
 }
 
@@ -125,4 +118,11 @@ class Endpoint
 {
     public MyHttpMethods HttpMethod { get; set; }
     public string Route { get; set; } = string.Empty;
+    public string Data { get; set; } = string.Empty;
+}
+
+class WebServerResponse
+{
+    public string Status { get; set; } = string.Empty;
+    public string Data { get; set; } = string.Empty;
 }
